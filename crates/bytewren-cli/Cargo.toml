@@ -1,0 +1,21 @@
+[package]
+name = "bytewren-cli"
+description = "Network traffic analyzer and protocol debugger"
+keywords = ["network", "packet", "sniffer", "debugging", "tcpdump"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bytewren"
+path = "src/main.rs"
+
+[dependencies]
+bytewren-capture = { version = "0.0.1", path = "../bytewren-capture" }
+bytewren-proto = { version = "0.0.1", path = "../bytewren-proto" }

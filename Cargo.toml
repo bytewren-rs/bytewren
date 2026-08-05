@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/bytewren-rs/bytewren"
+authors = ["Artur Efremov"]
+categories = ["network-programming"]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+indexing_slicing = "warn"
+cast_possible_truncation = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = 1
