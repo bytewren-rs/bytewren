@@ -1,14 +1,6 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#[cfg(target_os = "linux")]
+mod raw_socket_linux;
+pub use raw_socket_linux::capture_packet;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+#[cfg(target_os = "windows")]
+mod raw_socket_windows;

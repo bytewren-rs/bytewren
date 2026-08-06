@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "bytewren-capture"
 version = "0.0.1"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "bytewren-cli"
@@ -17,3 +20,9 @@ dependencies = [
 [[package]]
 name = "bytewren-proto"
 version = "0.0.1"
+
+[[package]]
+name = "libc"
+version = "0.2.189"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
