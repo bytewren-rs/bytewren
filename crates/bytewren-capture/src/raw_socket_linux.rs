@@ -36,7 +36,7 @@ impl RawSocket {
         }
     }
 
-    pub fn recvfrom(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub fn recvfrom(&self, buf: &mut [u8]) -> io::Result<(usize, sockaddr_ll)> {
         let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
         let mut addrlen = mem::size_of::<sockaddr_ll>() as u32;
         let n = unsafe {
@@ -52,7 +52,7 @@ impl RawSocket {
         if n == -1 {
             Err(io::Error::last_os_error())
         } else {
-            Ok(n as usize)
+            Ok((n as usize, addr))
         }
     }
 }
@@ -82,7 +82,7 @@ pub fn get_iface_index(name: &str) -> io::Result<c_int> {
             "имя интерфейса слишком длинное",
         ));
     }
-    ifr.ifr_name[..name_bytes_i8.len()].copy_from_slice(name_bytes_i8);
+    ifr.ifr_name[..name_bytes_i8.len()].copy_from_slice(name_bytes_i8); 
 
     let ret = unsafe {
         let res = libc::ioctl(tmp.fd, SIOCGIFINDEX, &mut ifr);
@@ -102,12 +102,12 @@ pub fn create_sockaddr_ll(ifindex: c_int) -> sockaddr_ll {
     addr
 }
 
-pub fn capture_packet(ifname: &str) -> io::Result<Vec<u8>> {
+pub fn capture_packet(ifname: &str) -> io::Result<(Vec<u8>, sockaddr_ll)> {
     // 1. Получить индекс интерфейса
     let ifindex = get_iface_index(ifname)?;
 
     // 2. Создать raw-сокет AF_PACKET + SOCK_RAW + ETH_P_ALL (в сетевом порядке)
-    let sock = RawSocket::new(AF_PACKET, SOCK_RAW, (ETH_P_ALL as u16).to_be() as c_int)?;
+    let sock = RawSocket::new(AF_PACKET, SOCK_RAW, 0)?;
 
     // 3. Подготовить адрес интерфейса (sockaddr_ll)
     let addr = create_sockaddr_ll(ifindex);
@@ -117,8 +117,8 @@ pub fn capture_packet(ifname: &str) -> io::Result<Vec<u8>> {
 
     // 5. Подготовить буфер и принять пакет
     let mut buf = vec![0u8; 65536];
-    let n = sock.recvfrom(&mut buf)?;
-    buf.truncate(n);
+    let recv_data = sock.recvfrom(&mut buf)?;
+    buf.truncate(recv_data.0);
 
-    Ok(buf)
+    Ok((buf, recv_data.1))
 }
