@@ -5,7 +5,7 @@ use std::io;
 fn main() -> io::Result<()> {
     let ifname = env::args().nth(1).unwrap_or_else(|| "eth0".to_string());
     println!("Ожидаем пакет на {}...", ifname);
-    
+
     let packet = capture_packet(&ifname)?;
 
     println!("Метаданные пакета: {:?}", packet.meta());

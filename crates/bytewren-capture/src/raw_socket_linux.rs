@@ -50,7 +50,10 @@ struct RawSocket {
 
 impl RawSocket {
     fn new(domain: c_int, ty: c_int, protocol: c_int) -> io::Result<Self> {
-        // SAFETY: нужно написать правильный комментарий.
+        // SAFETY: `socket` takes three `c_int` values by value and no pointers, so
+        // it has no access to memory owned by the caller. Unsupported arguments are
+        // reported as `-1` plus `errno`, never as undefined behaviour, so there is
+        // no precondition for the caller to uphold.
         let fd = unsafe { libc::socket(domain, ty, protocol) };
 
         if fd == -1 {
@@ -61,7 +64,13 @@ impl RawSocket {
     }
 
     fn bind(&self, addr: &sockaddr_ll) -> io::Result<()> {
-        // SAFETY: нужно написать правильный комментарий.
+        // SAFETY: `self.fd` is an open descriptor by the type invariant documented
+        // on `Drop`. `addr` is a live `&sockaddr_ll`, so the pointer is non-null,
+        // aligned and valid for reads of `size_of::<sockaddr_ll>()` bytes for the
+        // duration of the call. `bind` reinterprets it as `sockaddr` but reads only
+        // the number of bytes given by the third argument, which is exactly that
+        // size, so it cannot read past the end. The kernel copies what it needs and
+        // does not retain the pointer after returning.
         let ret = unsafe {
             libc::bind(
                 self.fd,
@@ -77,17 +86,24 @@ impl RawSocket {
     }
 
     fn recvfrom(&self, buf: &mut [u8]) -> io::Result<PacketMeta> {
-        // SAFETY: нужно написать правильный комментарий.
+        // SAFETY: all-zero is a valid bit pattern for `sockaddr_ll`: every field is
+        // an integer or an array of integers, and zero is a valid value for each.
         let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
         let mut addrlen = u32::try_from(mem::size_of::<sockaddr_ll>()).map_err(io::Error::other)?;
 
-        // SAFETY: нужно написать правильный комментарий.
+        // SAFETY: `self.fd` is an open descriptor by the type invariant documented
+        // on `Drop`. `buf.as_mut_ptr()` is valid for writes of `buf.len()` bytes and
+        // `buf.len()` is passed as the length, so the kernel cannot write past the
+        // end. `addr` is a live local, fully initialised above and valid for writes
+        // of `size_of::<sockaddr_ll>()` bytes; `addrlen` is initialised to that size
+        // and is an in-out parameter the kernel overwrites with the length it
+        // actually produced. Neither pointer is retained after the call returns.
         let n = unsafe {
             libc::recvfrom(
                 self.fd,
                 buf.as_mut_ptr() as *mut c_void,
                 buf.len(),
-                0,
+                0, // flags: no MSG_TRUNC yet, so truncation is currently invisible
                 &mut addr as *mut sockaddr_ll as *mut sockaddr,
                 &mut addrlen,
             )
@@ -106,7 +122,21 @@ impl RawSocket {
 
 impl Drop for RawSocket {
     fn drop(&mut self) {
-        // SAFETY: нужно написать правильный комментарий.
+        // The result is intentionally discarded: `drop` has no way to report an
+        // error, and on Linux the descriptor is released even when `close` fails
+        // with `EINTR` — retrying would close a descriptor that has since been
+        // reused by another thread.
+        //
+        // SAFETY: `self.fd` comes from a successful `libc::socket` call in
+        // `RawSocket::new`, which returns an error instead of constructing the
+        // value when the call fails. The field is private and `RawSocket` is
+        // constructed nowhere else, so it always holds an open descriptor.
+        //
+        // `drop` runs at most once per value, and `RawSocket` does not implement
+        // `Clone`, so no two values can hold the same descriptor number. The
+        // descriptor is therefore closed exactly once. Do not derive `Clone`:
+        // the kernel hands out the lowest free descriptor number, so a double
+        // close can silently close an unrelated file opened in between.
         unsafe {
             libc::close(self.fd);
         }
@@ -120,12 +150,20 @@ pub fn get_iface_index(name: &str) -> io::Result<c_int> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "имя содержит нулевой байт"))?;
     let name_bytes = c_name.as_bytes_with_nul();
 
-    // SAFETY: нужно написать правильный комментарий.
+    // SAFETY: `c_char` is an integer type with the same size and alignment as `u8`
+    // (both 1), and every bit pattern is valid for both, so these bytes are a valid
+    // `[c_char]` whether `c_char` is signed on this target or not. `name_bytes`
+    // borrows `c_name`, which outlives the slice and is never mutated while it is
+    // alive, so the pointer stays valid for reads of `name_bytes.len()` bytes.
     let name_bytes_i8: &[c_char] = unsafe {
         std::slice::from_raw_parts(name_bytes.as_ptr() as *const c_char, name_bytes.len())
     };
 
-    // SAFETY: нужно написать правильный комментарий.
+    // SAFETY: all-zero is a valid bit pattern for `ifreq`. `ifr_name` is an array
+    // of `c_char`, an integer type. `ifr_ifru` is a union whose variants are
+    // integer types, arrays of `c_char`, structs built from those, and a
+    // `*mut c_char`. Zero is valid for each: for the raw pointer it is null, which
+    // is a legal value for `*mut T` — unlike a reference, which must never be null.
     let mut ifr: ifreq = unsafe { mem::zeroed() };
 
     if name_bytes_i8.len() > ifr.ifr_name.len() {
@@ -144,19 +182,28 @@ pub fn get_iface_index(name: &str) -> io::Result<c_int> {
         })?
         .copy_from_slice(name_bytes_i8);
 
-    // SAFETY: нужно написать правильный комментарий.
-    let ret = unsafe {
-        let res = libc::ioctl(tmp.fd, SIOCGIFINDEX, &mut ifr);
-        if res == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        ifr.ifr_ifru.ifru_ifindex
-    };
-    Ok(ret)
+    // SAFETY: `tmp.fd` is an open descriptor by the type invariant documented on
+    // `Drop`. `ioctl` is variadic, so the compiler cannot check that the third
+    // argument matches the request number; `SIOCGIFINDEX` is documented in
+    // `netdevice(7)` to take a `*mut ifreq`, which is what is passed here. `ifr` is
+    // fully initialised and valid for reads and writes of `size_of::<ifreq>()`
+    // bytes for the duration of the call.
+    let res = unsafe { libc::ioctl(tmp.fd, SIOCGIFINDEX, &mut ifr) };
+    if res == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // SAFETY: the call above returned successfully, and `SIOCGIFINDEX` is documented
+    // to fill in the `ifru_ifindex` variant, so that is the variant currently stored
+    // in the union. This read must stay after the error check: on failure the kernel
+    // leaves the union as we passed it, and no variant would be known to be active.
+    let ifindex = unsafe { ifr.ifr_ifru.ifru_ifindex };
+    Ok(ifindex)
 }
 
 pub fn create_sockaddr_ll(ifindex: c_int) -> io::Result<sockaddr_ll> {
-    // SAFETY: нужно написать правильный комментарий.
+    // SAFETY: all-zero is a valid bit pattern for `sockaddr_ll`: every field is an
+    // integer or an array of integers, and zero is a valid value for each.
     let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
     addr.sll_family = u16::try_from(AF_PACKET).map_err(io::Error::other)?;
     addr.sll_protocol = u16::try_from(ETH_P_ALL).map_err(io::Error::other)?.to_be();
