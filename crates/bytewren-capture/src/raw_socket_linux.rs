@@ -1,10 +1,34 @@
 use libc::{
     AF_INET, AF_PACKET, ETH_P_ALL, SIOCGIFINDEX, SOCK_DGRAM, SOCK_RAW, c_char, c_int, c_void,
-    ifreq, sockaddr, sockaddr_ll,
+    ifreq, sockaddr, sockaddr_ll, socklen_t,
 };
 use std::io;
 use std::mem;
 use std::os::unix::io::RawFd;
+
+const _: () = assert!(size_of::<sockaddr_ll>() <= socklen_t::MAX as usize);
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "proven by the const assertion above"
+)]
+const SOCKADDR_LL_LEN: socklen_t = size_of::<sockaddr_ll>() as socklen_t;
+
+const _: () = assert!(AF_PACKET <= u16::MAX as c_int && AF_PACKET >= 0);
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "proven by the const assertion above"
+)]
+const AF_PACKET_U16: u16 = AF_PACKET as u16;
+
+const _: () = assert!(ETH_P_ALL <= u16::MAX as c_int && ETH_P_ALL >= 0);
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "proven by the const assertion above"
+)]
+const ETH_P_ALL_U16: u16 = ETH_P_ALL as u16;
 
 #[derive(Debug)]
 pub struct PacketMeta {
@@ -75,7 +99,7 @@ impl RawSocket {
             libc::bind(
                 self.fd,
                 addr as *const sockaddr_ll as *const sockaddr,
-                u32::try_from(mem::size_of::<sockaddr_ll>()).map_err(io::Error::other)?,
+                SOCKADDR_LL_LEN,
             )
         };
         if ret == -1 {
@@ -89,7 +113,7 @@ impl RawSocket {
         // SAFETY: all-zero is a valid bit pattern for `sockaddr_ll`: every field is
         // an integer or an array of integers, and zero is a valid value for each.
         let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
-        let mut addrlen = u32::try_from(mem::size_of::<sockaddr_ll>()).map_err(io::Error::other)?;
+        let mut addrlen = SOCKADDR_LL_LEN;
 
         // SAFETY: `self.fd` is an open descriptor by the type invariant documented
         // on `Drop`. `buf.as_mut_ptr()` is valid for writes of `buf.len()` bytes and
@@ -143,7 +167,7 @@ impl Drop for RawSocket {
     }
 }
 
-pub fn get_iface_index(name: &str) -> io::Result<c_int> {
+fn get_iface_index(name: &str) -> io::Result<c_int> {
     let tmp = RawSocket::new(AF_INET, SOCK_DGRAM, 0)?;
 
     let c_name = std::ffi::CString::new(name)
@@ -201,14 +225,14 @@ pub fn get_iface_index(name: &str) -> io::Result<c_int> {
     Ok(ifindex)
 }
 
-pub fn create_sockaddr_ll(ifindex: c_int) -> io::Result<sockaddr_ll> {
+fn create_sockaddr_ll(ifindex: c_int) -> sockaddr_ll {
     // SAFETY: all-zero is a valid bit pattern for `sockaddr_ll`: every field is an
     // integer or an array of integers, and zero is a valid value for each.
     let mut addr: sockaddr_ll = unsafe { mem::zeroed() };
-    addr.sll_family = u16::try_from(AF_PACKET).map_err(io::Error::other)?;
-    addr.sll_protocol = u16::try_from(ETH_P_ALL).map_err(io::Error::other)?.to_be();
+    addr.sll_family = AF_PACKET_U16;
+    addr.sll_protocol = ETH_P_ALL_U16.to_be();
     addr.sll_ifindex = ifindex;
-    Ok(addr)
+    addr
 }
 
 pub fn capture_packet(ifname: &str) -> io::Result<CapturedPacket> {
@@ -219,7 +243,7 @@ pub fn capture_packet(ifname: &str) -> io::Result<CapturedPacket> {
     let sock = RawSocket::new(AF_PACKET, SOCK_RAW, 0)?;
 
     // 3. Подготовить адрес интерфейса (sockaddr_ll)
-    let addr = create_sockaddr_ll(ifindex)?;
+    let addr = create_sockaddr_ll(ifindex);
 
     // 4. Привязать сокет к интерфейсу
     sock.bind(&addr)?;
