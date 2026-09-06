@@ -1,6 +1,6 @@
 use libc::{
-    AF_INET, AF_PACKET, ETH_P_ALL, SIOCGIFINDEX, SOCK_DGRAM, SOCK_RAW, c_char, c_int, c_void,
-    ifreq, sockaddr, sockaddr_ll, socklen_t,
+    AF_INET, AF_PACKET, ETH_P_ALL, IFNAMSIZ, SIOCGIFINDEX, SOCK_DGRAM, SOCK_RAW, c_char, c_int,
+    c_void, ifreq, sockaddr, sockaddr_ll, socklen_t,
 };
 use std::io;
 use std::mem;
@@ -170,8 +170,15 @@ impl Drop for RawSocket {
 fn get_iface_index(name: &str) -> io::Result<c_int> {
     let tmp = RawSocket::new(AF_INET, SOCK_DGRAM, 0)?;
 
-    let c_name = std::ffi::CString::new(name)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "имя содержит нулевой байт"))?;
+    let c_name = std::ffi::CString::new(name).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "interface name contains a NUL byte at position {}",
+                e.nul_position()
+            ),
+        )
+    })?;
     let name_bytes = c_name.as_bytes_with_nul();
 
     // SAFETY: `c_char` is an integer type with the same size and alignment as `u8`
@@ -190,18 +197,16 @@ fn get_iface_index(name: &str) -> io::Result<c_int> {
     // is a legal value for `*mut T` — unlike a reference, which must never be null.
     let mut ifr: ifreq = unsafe { mem::zeroed() };
 
-    if name_bytes_i8.len() > ifr.ifr_name.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "имя интерфейса слишком длинное",
-        ));
-    }
     ifr.ifr_name
         .get_mut(..name_bytes_i8.len())
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "имя интерфейса слишком длинное",
+                format!(
+                    "interface name is {} bytes, maximum is {}",
+                    name.len(),
+                    IFNAMSIZ - 1
+                ),
             )
         })?
         .copy_from_slice(name_bytes_i8);
@@ -236,19 +241,15 @@ fn create_sockaddr_ll(ifindex: c_int) -> sockaddr_ll {
 }
 
 pub fn capture_packet(ifname: &str) -> io::Result<CapturedPacket> {
-    // 1. Получить индекс интерфейса
     let ifindex = get_iface_index(ifname)?;
 
-    // 2. Создать raw-сокет AF_PACKET + SOCK_RAW + ETH_P_ALL (в сетевом порядке)
+    // `protocol` - 0, we don't want to receive packets before binding to the interface
     let sock = RawSocket::new(AF_PACKET, SOCK_RAW, 0)?;
 
-    // 3. Подготовить адрес интерфейса (sockaddr_ll)
     let addr = create_sockaddr_ll(ifindex);
 
-    // 4. Привязать сокет к интерфейсу
     sock.bind(&addr)?;
 
-    // 5. Подготовить буфер и принять пакет
     let mut buf = vec![0u8; 65536];
     let meta = sock.recvfrom(&mut buf)?;
     buf.truncate(meta.len());
